@@ -237,55 +237,62 @@ function App() {
         const sensorY = Math.max(0, Math.min(1, offY + adjY * (visH / vh)))
         const poi = { x: sensorX, y: sensorY }
 
-        // ── focus 전략 ─────────────────────────────────────────────
-        // Samsung Android: manual 킥 → 50ms 대기 → single-shot+AE 번들
-        // AE(노출)도 함께 요청해야 삼성에서 실제 AF sweep이 일어남
-        try { await track.applyConstraints({ advanced: [{ focusMode: 'manual', exposureMode: 'manual' }] }) } catch {}
-        await new Promise(r => setTimeout(r, 60))   // 삼성: 리셋 후 딜레이 필수
+        // ── 기기 capability 확인 ──────────────────────────────────────
+        const caps = track.getCapabilities?.() || {}
+        const hasPOI        = !!caps.pointOfInterest
+        const focusModes    = caps.focusMode || []
+        const hasSingleShot = focusModes.includes('single-shot')
+        const hasContinuous = focusModes.includes('continuous')
+        const hasManual     = focusModes.includes('manual')
 
-        // 1안: single-shot AF + AE 번들 + POI
-        if (!focusOk) try {
-          await track.applyConstraints({ advanced: [{
-            focusMode:    'single-shot',
-            exposureMode: 'single-shot',
-            pointOfInterest: poi,
-          }] })
-          focusOk = true
-        } catch {}
+        // ── focus 전략 ──────────────────────────────────────────────
+        // applyConstraints resolve = "명령 수락" (렌즈 이동 완료 아님)
+        // AF 스윕(렌즈 실제 이동)에 300-800ms 필요 → 완료 대기 필수
 
-        // 2안: single-shot AF만
-        if (!focusOk) try {
+        // 전략 A: continuous+POI → 450ms AF sweep → single-shot 잠금 (최고 정밀도)
+        if (!focusOk && hasContinuous && hasPOI && hasSingleShot) try {
+          await track.applyConstraints({ advanced: [{ focusMode: 'continuous', pointOfInterest: poi }] })
+          await new Promise(r => setTimeout(r, 450))   // 렌즈가 POI 방향으로 sweep
           await track.applyConstraints({ advanced: [{ focusMode: 'single-shot', pointOfInterest: poi }] })
+          await new Promise(r => setTimeout(r, 200))   // 잠금 안정화
           focusOk = true
         } catch {}
 
-        // 3안: continuous + POI (리셋 효과)
+        // 전략 B: manual 리셋 → single-shot+AE 번들 + AF 완료 대기
         if (!focusOk) try {
+          if (hasManual) {
+            try { await track.applyConstraints({ advanced: [{ focusMode: 'manual', exposureMode: 'manual' }] }) } catch {}
+            await new Promise(r => setTimeout(r, 80))
+          }
           await track.applyConstraints({ advanced: [{
-            focusMode: 'continuous', exposureMode: 'continuous', pointOfInterest: poi,
+            focusMode:       hasSingleShot ? 'single-shot' : 'continuous',
+            exposureMode:    'single-shot',
+            ...(hasPOI ? { pointOfInterest: poi } : {}),
           }] })
+          await new Promise(r => setTimeout(r, 700))   // AF sweep 완료 대기
           focusOk = true
         } catch {}
 
-        // 4안: ImageCapture API (pointsOfInterest 복수형)
+        // 전략 C: ImageCapture API
         if (!focusOk && typeof ImageCapture !== 'undefined') try {
           const ic = new ImageCapture(track)
-          await ic.setOptions({ focusMode: 'single-shot', pointsOfInterest: [poi],
-                                exposureMode: 'single-shot', exposurePointsOfInterest: [poi] })
+          await ic.setOptions({
+            focusMode: 'single-shot',
+            exposureMode: 'single-shot',
+            ...(hasPOI ? { pointsOfInterest: [poi], exposurePointsOfInterest: [poi] } : {}),
+          })
+          await new Promise(r => setTimeout(r, 700))
           focusOk = true
         } catch {}
 
-        // 5안: continuous 재트리거 (AE+WB 포함)
+        // 전략 D: continuous 재트리거 (최후 수단)
         if (!focusOk) try {
-          await track.applyConstraints({ advanced: [{
-            focusMode: 'continuous', exposureMode: 'continuous', whiteBalanceMode: 'continuous',
-          }] })
+          await track.applyConstraints({ advanced: [{ focusMode: 'continuous', exposureMode: 'continuous' }] })
           focusOk = true
         } catch {}
 
         if (focusOk) {
           setFocusPoint(p => ({ ...p, status: 'locked' }))
-          // 4s 후 continuous 복귀 — 잠금 충분히 유지
           focusTimerRef.current = setTimeout(async () => {
             setFocusPoint(p => ({ ...p, show: false }))
             try { await track.applyConstraints({ advanced: [{ focusMode: 'continuous', exposureMode: 'continuous' }] }) } catch {}
