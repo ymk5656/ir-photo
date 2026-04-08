@@ -23,20 +23,6 @@ const getGetUserMedia = () => {
   return null
 }
 
-const SAMPLE_IMAGE = 'data:image/svg+xml,' + encodeURIComponent(`
-<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
-  <rect fill="#1a3a1a" width="800" height="600"/>
-  <rect fill="#2d5a1b" x="0" y="300" width="800" height="300"/>
-  <circle cx="400" cy="180" r="120" fill="#87CEEB" opacity="0.6"/>
-  <ellipse cx="200" cy="350" rx="100" ry="60" fill="#3a7a1e"/>
-  <ellipse cx="600" cy="370" rx="80" ry="50" fill="#2d6a18"/>
-  <rect x="340" y="280" width="120" height="120" fill="#c8a882"/>
-  <rect x="370" y="320" width="40" height="80" fill="#8b6347"/>
-  <ellipse cx="400" cy="470" rx="200" ry="30" fill="#1a4a8a" opacity="0.7"/>
-  <circle cx="400" cy="70" r="50" fill="#FFD700" opacity="0.9"/>
-</svg>
-`)
-
 // ── Groq Vision API + AI IR 파라미터 ──────────────────────────────
 async function resizeBase64(base64, maxDim = 768) {
   return new Promise(resolve => {
@@ -119,7 +105,6 @@ function App() {
   const [cameraReady,  setCameraReady]  = useState(false)
   const [hasStream,    setHasStream]    = useState(false)
   const [facingMode,   setFacingMode]   = useState('environment')
-  const [demoMode,     setDemoMode]     = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
 
   const [mode,             setMode]             = useState('infrared')
@@ -151,7 +136,6 @@ function App() {
   const streamRef       = useRef(null)
   const canvasRef       = useRef(null)
   const hiddenCanvasRef = useRef(null)
-  const demoImageRef    = useRef(null)
   const fileInputRef    = useRef(null)
   const rawCaptureRef   = useRef(null)
   const touchRef        = useRef({ pinchDist:0, pinchScale:1, tapX:0, tapY:0, tapTime:0, tapMoved:false })
@@ -323,7 +307,7 @@ function App() {
   const initializeCamera = useCallback(async (facing, res) => {
     const f = facing ?? facingMode
     const { w, h } = RESOLUTIONS[res ?? resolution]
-    if (!getUserMediaFn) { setDemoMode(true); setPermission('granted'); return }
+    if (!getUserMediaFn) { setPermission('error'); setErrorMessage('이 브라우저는 카메라를 지원하지 않습니다.'); return }
     setErrorMessage(''); setPermission('prompting'); setCameraReady(false)
     try {
       let stream
@@ -360,7 +344,6 @@ function App() {
     streamRef.current = null
     setHasStream(false); setCameraReady(false); setPermission('initial')
   }, [])
-  const enableDemoMode = useCallback(() => { setDemoMode(true); setPermission('granted') }, [])
   const resetOptions = useCallback(() => {
     setBrightness(0); setContrast(0); setSaturation(0)
     setIntensity('MEDIUM'); setWarmTone(50); setFilmGrain(40); setVignette(55)
@@ -483,15 +466,7 @@ function App() {
     const canvas = hiddenCanvasRef.current
     const ctx    = canvas.getContext('2d')
 
-    if (demoMode && demoImageRef.current) {
-      setShowCaptureFlash(true); setTimeout(()=>setShowCaptureFlash(false),150)
-      const img = demoImageRef.current
-      const iw = img.naturalWidth||800, ih = img.naturalHeight||600
-      const sw = Math.round(iw/zoomScale), sh = Math.round(ih/zoomScale)
-      const sx = Math.round((iw-sw)/2),   sy = Math.round((ih-sh)/2)
-      canvas.width=sw; canvas.height=sh
-      ctx.drawImage(img, sx,sy,sw,sh, 0,0,sw,sh)
-    } else {
+    {
       if (!videoRef.current || !cameraReady) return
       setShowCaptureFlash(true); setTimeout(()=>setShowCaptureFlash(false),150)
       const v = videoRef.current
@@ -531,7 +506,7 @@ function App() {
     const url = canvas.toDataURL('image/jpeg', 0.92)
     setLastCapture(url); setPreview(url)
   }, [mode, intensity, brightness, contrast, saturation, warmTone, filmGrain, vignette,
-      zoomScale, hwZoom, applyInfraredFilter, applyCommonAdjustments, addScanlinesAndNoise, demoMode, cameraReady])
+      zoomScale, hwZoom, applyInfraredFilter, applyCommonAdjustments, addScanlinesAndNoise, cameraReady])
 
   // ── AI 적외선 재분석 (InfraGAN 방식 + 파라미터 자동 조정) ─────
   const reanalyzeWithAI = useCallback(async () => {
@@ -613,20 +588,19 @@ function App() {
      applyInfraredFilter,applyCommonAdjustments,addScanlinesAndNoise])
 
   const toggleCamera = useCallback(()=>{
-    if(demoMode){setDemoMode(false);setHasStream(false);setCameraReady(false);setPermission('initial');return}
     streamRef.current?.getTracks().forEach(t=>t.stop()); streamRef.current=null
     setHasStream(false); setCameraReady(false)
     const nf=facingMode==='environment'?'user':'environment'
     setFacingMode(nf); initializeCamera(nf,resolution)
-  },[facingMode,resolution,initializeCamera,demoMode])
+  },[facingMode,resolution,initializeCamera])
 
   const handleResolutionChange = useCallback((newRes)=>{
     setResolution(newRes)
-    if(hasStream&&!demoMode){
+    if(hasStream){
       streamRef.current?.getTracks().forEach(t=>t.stop()); streamRef.current=null
       setHasStream(false); setCameraReady(false); initializeCamera(facingMode,newRes)
     }
-  },[hasStream,demoMode,facingMode,initializeCamera])
+  },[hasStream,facingMode,initializeCamera])
 
   // ── 에러 화면 ────────────────────────────────────────────────
   if (permission==='denied'||permission==='error') return (
@@ -638,12 +612,11 @@ function App() {
         <h2>{permission==='denied'?'카메라 권한이 거부되었습니다':'카메라 오류'}</h2>
         <p>{errorMessage}</p>
         <button className="retry-btn" onClick={handleRetry}>다시 시도</button>
-        <button className="retry-btn" onClick={enableDemoMode} style={{marginTop:12,background:'#111',border:'1px solid #333'}}>데모 모드</button>
       </div>
     </div>
   )
 
-  const showOverlay = !demoMode && (!hasStream || !cameraReady)
+  const showOverlay = !hasStream || !cameraReady
   const zoomLabel   = zoomScale.toFixed(1).replace('.0','') + '×'
 
   // ── 렌더 ─────────────────────────────────────────────────────
@@ -661,11 +634,6 @@ function App() {
           onLoadedMetadata={()=>{setCameraReady(true);setPermission('granted')}}
           style={{...liveFilter, transform: hwZoom ? undefined : `scale(${zoomScale})`, transformOrigin:'center center'}}
         />
-        {demoMode && (
-          <img ref={demoImageRef} src={SAMPLE_IMAGE} alt="demo" className="camera-video"
-            style={{objectFit:'cover',...liveFilter,transform:`scale(${zoomScale})`,transformOrigin:'center center'}}/>
-        )}
-
         {/* 초점 링 */}
         {focusPoint.show && (
           <div key={focusPoint.key}
@@ -690,8 +658,6 @@ function App() {
               : <>
                   <p className="placeholder-text">카메라 접근 권한이 필요합니다</p>
                   <button className="permission-btn" onClick={()=>initializeCamera()} style={{marginTop:20}}>카메라 허용하기</button>
-                  <button className="retry-btn" onClick={enableDemoMode}
-                    style={{marginTop:12,background:'transparent',border:'1px solid rgba(255,255,255,0.3)',color:'#fff'}}>데모 모드</button>
                 </>
             }
           </div>
