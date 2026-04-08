@@ -237,34 +237,31 @@ function App() {
         const sensorY = Math.max(0, Math.min(1, offY + adjY * (visH / vh)))
         const poi = { x: sensorX, y: sensorY }
 
-        // ── focus 전략: 가장 넓게 호환되는 순서로 시도 ────────────
-        // 1안: continuous + POI — Samsung Chrome에서 가장 잘 동작
-        if (!focusOk) try {
-          await track.applyConstraints({ advanced: [{ focusMode: 'continuous', pointOfInterest: poi }] })
-          focusOk = true
-        } catch {}
+        // ── focus 전략 ────────────────────────────────────────────
+        // manual 킥 → single-shot: AF 상태를 리셋하고 즉시 새 sweep 트리거
+        // 이 시퀀스가 Samsung Android Chrome에서 AF를 가장 확실하게 동작시킴
+        try { await track.applyConstraints({ advanced: [{ focusMode: 'manual' }] }) } catch {}
 
-        // 2안: single-shot + POI (Pixel/최신 Chrome)
+        // 1안: single-shot + POI (manual 킥 이후 — 가장 정밀)
         if (!focusOk) try {
           await track.applyConstraints({ advanced: [{ focusMode: 'single-shot', pointOfInterest: poi }] })
           focusOk = true
         } catch {}
 
-        // 3안: manual → POI 분리 호출
+        // 2안: continuous + POI
         if (!focusOk) try {
-          await track.applyConstraints({ advanced: [{ focusMode: 'manual' }] })
-          await track.applyConstraints({ advanced: [{ pointOfInterest: poi }] })
+          await track.applyConstraints({ advanced: [{ focusMode: 'continuous', pointOfInterest: poi }] })
           focusOk = true
         } catch {}
 
-        // 4안: ImageCapture API (pointsOfInterest — 복수형)
+        // 3안: ImageCapture.setOptions (pointsOfInterest 복수형)
         if (!focusOk && typeof ImageCapture !== 'undefined') try {
           const ic = new ImageCapture(track)
           await ic.setOptions({ focusMode: 'single-shot', pointsOfInterest: [poi] })
           focusOk = true
         } catch {}
 
-        // 5안: continuous 재트리거 (자동 초점 강제 갱신)
+        // 4안: continuous 재트리거
         if (!focusOk) try {
           await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] })
           focusOk = true
@@ -326,6 +323,10 @@ function App() {
       streamRef.current = stream
       const v = videoRef.current
       if (v) { v.srcObject = stream; v.play().catch(() => {}) }
+      // 스트림 시작 즉시 continuous AF 요청
+      try {
+        await stream.getVideoTracks()[0]?.applyConstraints({ advanced: [{ focusMode: 'continuous' }] })
+      } catch {}
       setCameraReady(true); setPermission('granted'); setHasStream(true)
     } catch (err) {
       const map = {
@@ -470,16 +471,41 @@ function App() {
       if (!videoRef.current || !cameraReady) return
       setShowCaptureFlash(true); setTimeout(()=>setShowCaptureFlash(false),150)
       const v = videoRef.current
-      if (hwZoomRef.current) {
-        // 하드웨어 줌: 비디오 프레임 자체가 이미 줌된 상태 → 전체 프레임 사용
-        canvas.width=v.videoWidth; canvas.height=v.videoHeight
-        ctx.drawImage(v, 0,0)
-      } else {
-        // CSS 줌 폴백: 중앙 크롭으로 줌 시뮬레이션
-        const sw = Math.round(v.videoWidth/zoomScale), sh = Math.round(v.videoHeight/zoomScale)
-        const sx = Math.round((v.videoWidth-sw)/2),    sy = Math.round((v.videoHeight-sh)/2)
-        canvas.width=sw; canvas.height=sh
-        ctx.drawImage(v, sx,sy,sw,sh, 0,0,sw,sh)
+      const track = streamRef.current?.getVideoTracks()[0]
+
+      // ImageCapture.takePhoto() — 카메라 하드웨어 ISP(샤프닝·노이즈 감소) 활용, 풀 해상도
+      let usedImageCapture = false
+      if (track && typeof ImageCapture !== 'undefined') {
+        try {
+          const ic = new ImageCapture(track)
+          const blob = await ic.takePhoto()
+          const bitmap = await createImageBitmap(blob)
+          if (hwZoomRef.current) {
+            canvas.width=bitmap.width; canvas.height=bitmap.height
+            ctx.drawImage(bitmap, 0, 0)
+          } else {
+            // CSS 줌인 경우 중앙 크롭
+            const sw = Math.round(bitmap.width/zoomScale), sh = Math.round(bitmap.height/zoomScale)
+            const sx = Math.round((bitmap.width-sw)/2),    sy = Math.round((bitmap.height-sh)/2)
+            canvas.width=sw; canvas.height=sh
+            ctx.drawImage(bitmap, sx,sy,sw,sh, 0,0,sw,sh)
+          }
+          bitmap.close()
+          usedImageCapture = true
+        } catch {}
+      }
+
+      if (!usedImageCapture) {
+        // 폴백: 비디오 프레임 직접 캡처
+        if (hwZoomRef.current) {
+          canvas.width=v.videoWidth; canvas.height=v.videoHeight
+          ctx.drawImage(v, 0,0)
+        } else {
+          const sw = Math.round(v.videoWidth/zoomScale), sh = Math.round(v.videoHeight/zoomScale)
+          const sx = Math.round((v.videoWidth-sw)/2),    sy = Math.round((v.videoHeight-sh)/2)
+          canvas.width=sw; canvas.height=sh
+          ctx.drawImage(v, sx,sy,sw,sh, 0,0,sw,sh)
+        }
       }
     }
 
