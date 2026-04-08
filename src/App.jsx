@@ -212,36 +212,59 @@ function App() {
       const relY = Math.max(0, Math.min(1, y / rect.height))
 
       clearTimeout(focusTimerRef.current)
-      // 초기: 탐색 중 (주황 링)
       setFocusPoint(p => ({ x, y, key: p.key + 1, show: true, status: 'seeking' }))
 
       const track = streamRef.current?.getVideoTracks()[0]
       let focusOk = false
 
       if (track) {
-        const poi = { x: relX, y: relY }
+        // ── 정확한 센서 좌표 계산 ───────────────────────────────────
+        // 1) CSS scale(zoomScale) 역변환 — 줌 중심은 element 중앙
+        const adjX = Math.max(0, Math.min(1, 0.5 + (relX - 0.5) / zoomScale))
+        const adjY = Math.max(0, Math.min(1, 0.5 + (relY - 0.5) / zoomScale))
 
-        // capabilities 체크 없이 직접 시도 — 많은 기기에서 getCapabilities()가 빈 객체를 반환함
-        // 1안: single-shot + pointOfInterest 한 번에 (최신 Android Chrome)
+        // 2) object-fit:cover 역변환 — 실제 비디오 픽셀 기준 센서 좌표
+        const vw = videoRef.current?.videoWidth  || rect.width
+        const vh = videoRef.current?.videoHeight || rect.height
+        const cw = rect.width, ch = rect.height
+        const coverScale = Math.max(cw / vw, ch / vh)
+        const visW = cw / coverScale            // container에 보이는 비디오 가로(px)
+        const visH = ch / coverScale            // container에 보이는 비디오 세로(px)
+        const offX = (vw - visW) / 2 / vw      // 잘린 좌측 여백 (0~1)
+        const offY = (vh - visH) / 2 / vh      // 잘린 상단 여백 (0~1)
+
+        const sensorX = Math.max(0, Math.min(1, offX + adjX * (visW / vw)))
+        const sensorY = Math.max(0, Math.min(1, offY + adjY * (visH / vh)))
+        const poi = { x: sensorX, y: sensorY }
+
+        // ── focus 전략: 가장 넓게 호환되는 순서로 시도 ────────────
+        // 1안: continuous + POI — Samsung Chrome에서 가장 잘 동작
+        if (!focusOk) try {
+          await track.applyConstraints({ advanced: [{ focusMode: 'continuous', pointOfInterest: poi }] })
+          focusOk = true
+        } catch {}
+
+        // 2안: single-shot + POI (Pixel/최신 Chrome)
         if (!focusOk) try {
           await track.applyConstraints({ advanced: [{ focusMode: 'single-shot', pointOfInterest: poi }] })
           focusOk = true
         } catch {}
 
-        // 2안: 분리 호출 — focusMode 먼저, 이후 pointOfInterest
+        // 3안: manual → POI 분리 호출
         if (!focusOk) try {
           await track.applyConstraints({ advanced: [{ focusMode: 'manual' }] })
           await track.applyConstraints({ advanced: [{ pointOfInterest: poi }] })
           focusOk = true
         } catch {}
 
-        // 3안: single-shot만 (pointOfInterest 미지원 기기)
-        if (!focusOk) try {
-          await track.applyConstraints({ advanced: [{ focusMode: 'single-shot' }] })
+        // 4안: ImageCapture API (pointsOfInterest — 복수형)
+        if (!focusOk && typeof ImageCapture !== 'undefined') try {
+          const ic = new ImageCapture(track)
+          await ic.setOptions({ focusMode: 'single-shot', pointsOfInterest: [poi] })
           focusOk = true
         } catch {}
 
-        // 4안: continuous 재트리거 — 자동 초점 강제 갱신
+        // 5안: continuous 재트리거 (자동 초점 강제 갱신)
         if (!focusOk) try {
           await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] })
           focusOk = true
@@ -250,11 +273,9 @@ function App() {
         if (focusOk) {
           setFocusPoint(p => ({ ...p, status: 'locked' }))
           focusTimerRef.current = setTimeout(async () => {
-            try { await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }) } catch {}
             setFocusPoint(p => ({ ...p, show: false }))
-          }, 3000)
+          }, 2500)
         } else {
-          // iOS 등 미지원 — 회색 링
           setFocusPoint(p => ({ ...p, status: 'auto' }))
           focusTimerRef.current = setTimeout(() => setFocusPoint(p => ({ ...p, show: false })), 900)
         }
@@ -262,7 +283,7 @@ function App() {
         focusTimerRef.current = setTimeout(() => setFocusPoint(p => ({ ...p, show: false })), 1000)
       }
     }
-  }, [])
+  }, [zoomScale])
 
   const handleDoubleTap = useCallback(() => {
     setZoomScale(1)
