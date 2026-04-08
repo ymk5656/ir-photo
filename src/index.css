@@ -51,12 +51,30 @@ html, body, #root {
   border-radius: 6px;
   transform: translate(-50%, -50%);
   pointer-events: none; z-index: 15;
-  animation: focusFade 1.3s ease-out forwards;
+  animation: focusSeeking 0.25s ease-out forwards;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.4);
 }
-@keyframes focusFade {
-  0%   { opacity:1; transform:translate(-50%,-50%) scale(1.4); }
-  18%  { opacity:1; transform:translate(-50%,-50%) scale(1);   }
-  75%  { opacity:0.9; }
+/* 탐색 중: 크게 시작해 줄어듦 */
+@keyframes focusSeeking {
+  from { opacity:1; transform:translate(-50%,-50%) scale(1.5); }
+  to   { opacity:1; transform:translate(-50%,-50%) scale(1);   }
+}
+/* 초점 잠금 성공: 흰색으로 바뀌며 유지 */
+.focus-ring.locked {
+  border-color: #fff;
+  animation: focusLocked 0.2s ease-out forwards;
+}
+@keyframes focusLocked {
+  from { transform:translate(-50%,-50%) scale(1.1); }
+  to   { transform:translate(-50%,-50%) scale(0.9); }
+}
+/* 미지원 기기: 회색으로 빠르게 사라짐 */
+.focus-ring.auto {
+  border-color: rgba(255,255,255,0.4);
+  animation: focusAuto 0.9s ease-out forwards;
+}
+@keyframes focusAuto {
+  0%   { opacity:0.7; transform:translate(-50%,-50%) scale(1); }
   100% { opacity:0;   transform:translate(-50%,-50%) scale(1); }
 }
 

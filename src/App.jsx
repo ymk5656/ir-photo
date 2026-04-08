@@ -205,30 +205,63 @@ function App() {
     const { tapX, tapY, tapTime, tapMoved } = touchRef.current
     const dt = Date.now() - tapTime
     if (e.changedTouches.length === 1 && !tapMoved && dt < 320) {
-      // 단일 탭 → 초점
       const rect = e.currentTarget.getBoundingClientRect()
-      const cx = e.changedTouches[0].clientX
-      const cy = e.changedTouches[0].clientY
-      const x = cx - rect.left
-      const y = cy - rect.top
-      clearTimeout(focusTimerRef.current)
-      setFocusPoint(p => ({ x, y, key: p.key + 1, show: true }))
-      focusTimerRef.current = setTimeout(() => setFocusPoint(p => ({ ...p, show: false })), 1300)
+      const x    = e.changedTouches[0].clientX - rect.left
+      const y    = e.changedTouches[0].clientY - rect.top
+      const relX = Math.max(0, Math.min(1, x / rect.width))
+      const relY = Math.max(0, Math.min(1, y / rect.height))
 
-      // 하드웨어 초점 (지원 기기만)
+      clearTimeout(focusTimerRef.current)
+      // 초기: 탐색 중 (주황 링)
+      setFocusPoint(p => ({ x, y, key: p.key + 1, show: true, status: 'seeking' }))
+
       const track = streamRef.current?.getVideoTracks()[0]
+      let focusOk = false
+
       if (track) {
         try {
           const caps = track.getCapabilities?.() ?? {}
-          if (caps.focusMode?.includes('manual')) {
-            await track.applyConstraints({
-              advanced: [{ focusMode: 'manual', pointOfInterest: { x: x / rect.width, y: y / rect.height } }]
-            })
-            setTimeout(async () => {
-              try { await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }) } catch {}
-            }, 2000)
+          const modes = caps.focusMode ?? []
+          const hasPoi = 'pointOfInterest' in caps
+
+          if (modes.includes('single-shot') && hasPoi) {
+            // 1안: single-shot + pointOfInterest (Android Chrome 권장)
+            await track.applyConstraints({ advanced: [{ focusMode: 'single-shot' }] })
+            await track.applyConstraints({ advanced: [{ pointOfInterest: { x: relX, y: relY } }] })
+            focusOk = true
+          } else if (modes.includes('manual') && hasPoi) {
+            // 2안: manual 2단계 (일부 Android)
+            await track.applyConstraints({ advanced: [{ focusMode: 'manual' }] })
+            await track.applyConstraints({ advanced: [{ pointOfInterest: { x: relX, y: relY } }] })
+            focusOk = true
+          } else if (modes.includes('single-shot')) {
+            // 3안: pointOfInterest 미지원, 초점 트리거만
+            await track.applyConstraints({ advanced: [{ focusMode: 'single-shot' }] })
+            focusOk = true
+          } else if (modes.includes('continuous')) {
+            // 4안: continuous 재트리거 (자동 초점 강제 갱신)
+            await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] })
+            focusOk = true
           }
-        } catch {}
+
+          if (focusOk) {
+            setFocusPoint(p => ({ ...p, status: 'locked' }))
+            // 3초 후 자동 초점 복귀
+            focusTimerRef.current = setTimeout(async () => {
+              try { await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }) } catch {}
+              setFocusPoint(p => ({ ...p, show: false }))
+            }, 3000)
+          } else {
+            // 미지원 기기 — 회색 링 잠깐 표시
+            setFocusPoint(p => ({ ...p, status: 'auto' }))
+            focusTimerRef.current = setTimeout(() => setFocusPoint(p => ({ ...p, show: false })), 900)
+          }
+        } catch {
+          setFocusPoint(p => ({ ...p, status: 'auto' }))
+          focusTimerRef.current = setTimeout(() => setFocusPoint(p => ({ ...p, show: false })), 900)
+        }
+      } else {
+        focusTimerRef.current = setTimeout(() => setFocusPoint(p => ({ ...p, show: false })), 1000)
       }
     }
   }, [])
@@ -590,7 +623,8 @@ function App() {
 
         {/* 초점 링 */}
         {focusPoint.show && (
-          <div key={focusPoint.key} className="focus-ring"
+          <div key={focusPoint.key}
+            className={`focus-ring ${focusPoint.status ?? ''}`}
             style={{left:focusPoint.x, top:focusPoint.y}} />
         )}
 
