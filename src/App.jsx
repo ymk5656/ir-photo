@@ -237,41 +237,59 @@ function App() {
         const sensorY = Math.max(0, Math.min(1, offY + adjY * (visH / vh)))
         const poi = { x: sensorX, y: sensorY }
 
-        // ── focus 전략 ────────────────────────────────────────────
-        // manual 킥 → single-shot: AF 상태를 리셋하고 즉시 새 sweep 트리거
-        // 이 시퀀스가 Samsung Android Chrome에서 AF를 가장 확실하게 동작시킴
-        try { await track.applyConstraints({ advanced: [{ focusMode: 'manual' }] }) } catch {}
+        // ── focus 전략 ─────────────────────────────────────────────
+        // Samsung Android: manual 킥 → 50ms 대기 → single-shot+AE 번들
+        // AE(노출)도 함께 요청해야 삼성에서 실제 AF sweep이 일어남
+        try { await track.applyConstraints({ advanced: [{ focusMode: 'manual', exposureMode: 'manual' }] }) } catch {}
+        await new Promise(r => setTimeout(r, 60))   // 삼성: 리셋 후 딜레이 필수
 
-        // 1안: single-shot + POI (manual 킥 이후 — 가장 정밀)
+        // 1안: single-shot AF + AE 번들 + POI
+        if (!focusOk) try {
+          await track.applyConstraints({ advanced: [{
+            focusMode:    'single-shot',
+            exposureMode: 'single-shot',
+            pointOfInterest: poi,
+          }] })
+          focusOk = true
+        } catch {}
+
+        // 2안: single-shot AF만
         if (!focusOk) try {
           await track.applyConstraints({ advanced: [{ focusMode: 'single-shot', pointOfInterest: poi }] })
           focusOk = true
         } catch {}
 
-        // 2안: continuous + POI
+        // 3안: continuous + POI (리셋 효과)
         if (!focusOk) try {
-          await track.applyConstraints({ advanced: [{ focusMode: 'continuous', pointOfInterest: poi }] })
+          await track.applyConstraints({ advanced: [{
+            focusMode: 'continuous', exposureMode: 'continuous', pointOfInterest: poi,
+          }] })
           focusOk = true
         } catch {}
 
-        // 3안: ImageCapture.setOptions (pointsOfInterest 복수형)
+        // 4안: ImageCapture API (pointsOfInterest 복수형)
         if (!focusOk && typeof ImageCapture !== 'undefined') try {
           const ic = new ImageCapture(track)
-          await ic.setOptions({ focusMode: 'single-shot', pointsOfInterest: [poi] })
+          await ic.setOptions({ focusMode: 'single-shot', pointsOfInterest: [poi],
+                                exposureMode: 'single-shot', exposurePointsOfInterest: [poi] })
           focusOk = true
         } catch {}
 
-        // 4안: continuous 재트리거
+        // 5안: continuous 재트리거 (AE+WB 포함)
         if (!focusOk) try {
-          await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] })
+          await track.applyConstraints({ advanced: [{
+            focusMode: 'continuous', exposureMode: 'continuous', whiteBalanceMode: 'continuous',
+          }] })
           focusOk = true
         } catch {}
 
         if (focusOk) {
           setFocusPoint(p => ({ ...p, status: 'locked' }))
+          // 4s 후 continuous 복귀 — 잠금 충분히 유지
           focusTimerRef.current = setTimeout(async () => {
             setFocusPoint(p => ({ ...p, show: false }))
-          }, 2500)
+            try { await track.applyConstraints({ advanced: [{ focusMode: 'continuous', exposureMode: 'continuous' }] }) } catch {}
+          }, 4000)
         } else {
           setFocusPoint(p => ({ ...p, status: 'auto' }))
           focusTimerRef.current = setTimeout(() => setFocusPoint(p => ({ ...p, show: false })), 900)
