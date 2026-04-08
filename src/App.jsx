@@ -219,44 +219,42 @@ function App() {
       let focusOk = false
 
       if (track) {
-        try {
-          const caps = track.getCapabilities?.() ?? {}
-          const modes = caps.focusMode ?? []
-          const hasPoi = 'pointOfInterest' in caps
+        const poi = { x: relX, y: relY }
 
-          if (modes.includes('single-shot') && hasPoi) {
-            // 1안: single-shot + pointOfInterest (Android Chrome 권장)
-            await track.applyConstraints({ advanced: [{ focusMode: 'single-shot' }] })
-            await track.applyConstraints({ advanced: [{ pointOfInterest: { x: relX, y: relY } }] })
-            focusOk = true
-          } else if (modes.includes('manual') && hasPoi) {
-            // 2안: manual 2단계 (일부 Android)
-            await track.applyConstraints({ advanced: [{ focusMode: 'manual' }] })
-            await track.applyConstraints({ advanced: [{ pointOfInterest: { x: relX, y: relY } }] })
-            focusOk = true
-          } else if (modes.includes('single-shot')) {
-            // 3안: pointOfInterest 미지원, 초점 트리거만
-            await track.applyConstraints({ advanced: [{ focusMode: 'single-shot' }] })
-            focusOk = true
-          } else if (modes.includes('continuous')) {
-            // 4안: continuous 재트리거 (자동 초점 강제 갱신)
-            await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] })
-            focusOk = true
-          }
+        // capabilities 체크 없이 직접 시도 — 많은 기기에서 getCapabilities()가 빈 객체를 반환함
+        // 1안: single-shot + pointOfInterest 한 번에 (최신 Android Chrome)
+        if (!focusOk) try {
+          await track.applyConstraints({ advanced: [{ focusMode: 'single-shot', pointOfInterest: poi }] })
+          focusOk = true
+        } catch {}
 
-          if (focusOk) {
-            setFocusPoint(p => ({ ...p, status: 'locked' }))
-            // 3초 후 자동 초점 복귀
-            focusTimerRef.current = setTimeout(async () => {
-              try { await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }) } catch {}
-              setFocusPoint(p => ({ ...p, show: false }))
-            }, 3000)
-          } else {
-            // 미지원 기기 — 회색 링 잠깐 표시
-            setFocusPoint(p => ({ ...p, status: 'auto' }))
-            focusTimerRef.current = setTimeout(() => setFocusPoint(p => ({ ...p, show: false })), 900)
-          }
-        } catch {
+        // 2안: 분리 호출 — focusMode 먼저, 이후 pointOfInterest
+        if (!focusOk) try {
+          await track.applyConstraints({ advanced: [{ focusMode: 'manual' }] })
+          await track.applyConstraints({ advanced: [{ pointOfInterest: poi }] })
+          focusOk = true
+        } catch {}
+
+        // 3안: single-shot만 (pointOfInterest 미지원 기기)
+        if (!focusOk) try {
+          await track.applyConstraints({ advanced: [{ focusMode: 'single-shot' }] })
+          focusOk = true
+        } catch {}
+
+        // 4안: continuous 재트리거 — 자동 초점 강제 갱신
+        if (!focusOk) try {
+          await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] })
+          focusOk = true
+        } catch {}
+
+        if (focusOk) {
+          setFocusPoint(p => ({ ...p, status: 'locked' }))
+          focusTimerRef.current = setTimeout(async () => {
+            try { await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }) } catch {}
+            setFocusPoint(p => ({ ...p, show: false }))
+          }, 3000)
+        } else {
+          // iOS 등 미지원 — 회색 링
           setFocusPoint(p => ({ ...p, status: 'auto' }))
           focusTimerRef.current = setTimeout(() => setFocusPoint(p => ({ ...p, show: false })), 900)
         }
