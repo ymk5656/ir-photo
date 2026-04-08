@@ -143,7 +143,9 @@ function App() {
   const [resolution,  setResolution]  = useState(DEFAULT_OPTIONS.resolution)
 
   const [zoomScale,   setZoomScale]   = useState(1)
+  const [hwZoom,      setHwZoom]      = useState(false)   // 하드웨어 줌 사용 중 여부
   const [focusPoint,  setFocusPoint]  = useState({ x: 0, y: 0, key: 0, show: false })
+  const hwZoomRef = useRef(false)   // 렌더 없이 캡처·포커스에서 동기 참조
 
   const videoRef        = useRef(null)
   const streamRef       = useRef(null)
@@ -191,6 +193,15 @@ function App() {
       const scale = touchRef.current.pinchScale * (dist / touchRef.current.pinchDist)
       const next  = Math.min(6, Math.max(1, scale))
       setZoomScale(next)
+
+      // 하드웨어 줌 시도 (선명도 유지) — 실패 시 CSS scale 폴백
+      const track = streamRef.current?.getVideoTracks()[0]
+      if (track) {
+        track.applyConstraints({ advanced: [{ zoom: next }] })
+          .then(() => { hwZoomRef.current = true; setHwZoom(true) })
+          .catch(() => { hwZoomRef.current = false; setHwZoom(false) })
+      }
+
       clearTimeout(zoomTimerRef.current)
       setShowZoom(true)
       zoomTimerRef.current = setTimeout(() => setShowZoom(false), 1500)
@@ -219,19 +230,24 @@ function App() {
 
       if (track) {
         // ── 정확한 센서 좌표 계산 ───────────────────────────────────
-        // 1) CSS scale(zoomScale) 역변환 — 줌 중심은 element 중앙
-        const adjX = Math.max(0, Math.min(1, 0.5 + (relX - 0.5) / zoomScale))
-        const adjY = Math.max(0, Math.min(1, 0.5 + (relY - 0.5) / zoomScale))
+        // 하드웨어 줌 활성 시: 비디오 프레임 자체가 이미 줌된 상태 → CSS scale 역변환 불필요
+        // CSS 줌 폴백 시: scale(zoomScale) 역변환 필요
+        const adjX = hwZoomRef.current
+          ? relX
+          : Math.max(0, Math.min(1, 0.5 + (relX - 0.5) / zoomScale))
+        const adjY = hwZoomRef.current
+          ? relY
+          : Math.max(0, Math.min(1, 0.5 + (relY - 0.5) / zoomScale))
 
-        // 2) object-fit:cover 역변환 — 실제 비디오 픽셀 기준 센서 좌표
+        // object-fit:cover 역변환 — 실제 비디오 픽셀 기준 센서 좌표
         const vw = videoRef.current?.videoWidth  || rect.width
         const vh = videoRef.current?.videoHeight || rect.height
         const cw = rect.width, ch = rect.height
         const coverScale = Math.max(cw / vw, ch / vh)
-        const visW = cw / coverScale            // container에 보이는 비디오 가로(px)
-        const visH = ch / coverScale            // container에 보이는 비디오 세로(px)
-        const offX = (vw - visW) / 2 / vw      // 잘린 좌측 여백 (0~1)
-        const offY = (vh - visH) / 2 / vh      // 잘린 상단 여백 (0~1)
+        const visW = cw / coverScale
+        const visH = ch / coverScale
+        const offX = (vw - visW) / 2 / vw
+        const offY = (vh - visH) / 2 / vh
 
         const sensorX = Math.max(0, Math.min(1, offX + adjX * (visW / vw)))
         const sensorY = Math.max(0, Math.min(1, offY + adjY * (visH / vh)))
@@ -287,6 +303,9 @@ function App() {
 
   const handleDoubleTap = useCallback(() => {
     setZoomScale(1)
+    hwZoomRef.current = false; setHwZoom(false)
+    const track = streamRef.current?.getVideoTracks()[0]
+    if (track) track.applyConstraints({ advanced: [{ zoom: 1 }] }).catch(() => {})
     setShowZoom(true)
     clearTimeout(zoomTimerRef.current)
     zoomTimerRef.current = setTimeout(() => setShowZoom(false), 800)
@@ -476,10 +495,17 @@ function App() {
       if (!videoRef.current || !cameraReady) return
       setShowCaptureFlash(true); setTimeout(()=>setShowCaptureFlash(false),150)
       const v = videoRef.current
-      const sw = Math.round(v.videoWidth/zoomScale), sh = Math.round(v.videoHeight/zoomScale)
-      const sx = Math.round((v.videoWidth-sw)/2),    sy = Math.round((v.videoHeight-sh)/2)
-      canvas.width=sw; canvas.height=sh
-      ctx.drawImage(v, sx,sy,sw,sh, 0,0,sw,sh)
+      if (hwZoomRef.current) {
+        // 하드웨어 줌: 비디오 프레임 자체가 이미 줌된 상태 → 전체 프레임 사용
+        canvas.width=v.videoWidth; canvas.height=v.videoHeight
+        ctx.drawImage(v, 0,0)
+      } else {
+        // CSS 줌 폴백: 중앙 크롭으로 줌 시뮬레이션
+        const sw = Math.round(v.videoWidth/zoomScale), sh = Math.round(v.videoHeight/zoomScale)
+        const sx = Math.round((v.videoWidth-sw)/2),    sy = Math.round((v.videoHeight-sh)/2)
+        canvas.width=sw; canvas.height=sh
+        ctx.drawImage(v, sx,sy,sw,sh, 0,0,sw,sh)
+      }
     }
 
     rawCaptureRef.current = canvas.toDataURL('image/jpeg', 0.85).split(',')[1]
@@ -505,7 +531,7 @@ function App() {
     const url = canvas.toDataURL('image/jpeg', 0.92)
     setLastCapture(url); setPreview(url)
   }, [mode, intensity, brightness, contrast, saturation, warmTone, filmGrain, vignette,
-      zoomScale, applyInfraredFilter, applyCommonAdjustments, addScanlinesAndNoise, demoMode, cameraReady])
+      zoomScale, hwZoom, applyInfraredFilter, applyCommonAdjustments, addScanlinesAndNoise, demoMode, cameraReady])
 
   // ── AI 적외선 재분석 (InfraGAN 방식 + 파라미터 자동 조정) ─────
   const reanalyzeWithAI = useCallback(async () => {
@@ -633,7 +659,7 @@ function App() {
       >
         <video ref={videoRef} className="camera-video" playsInline muted
           onLoadedMetadata={()=>{setCameraReady(true);setPermission('granted')}}
-          style={{...liveFilter, transform:`scale(${zoomScale})`, transformOrigin:'center center'}}
+          style={{...liveFilter, transform: hwZoom ? undefined : `scale(${zoomScale})`, transformOrigin:'center center'}}
         />
         {demoMode && (
           <img ref={demoImageRef} src={SAMPLE_IMAGE} alt="demo" className="camera-video"
