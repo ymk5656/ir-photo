@@ -336,9 +336,26 @@ function App() {
   }, [isAnalyzing, brightness, contrast, warmTone, filmGrain, vignette,
       applyAIInfraredFilter, applyCommonAdjustments, addScanlinesAndNoise])
 
-  const savePhoto = useCallback(() => {
+  const savePhoto = useCallback(async () => {
     if (!preview) return
-    const a = document.createElement('a'); a.download = `IR_${Date.now()}.jpg`; a.href = preview; a.click()
+    const filename = `IR_${Date.now()}.jpg`
+    // Web Share API: Android 공유 시트 → 갤러리 저장 가능
+    if (navigator.canShare) {
+      try {
+        const blob = await fetch(preview).then(r => r.blob())
+        const file = new File([blob], filename, { type: 'image/jpeg' })
+        if (navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file], title: '적외선 사진' })
+          setPreview(null)
+          return
+        }
+      } catch (err) {
+        if (err.name === 'AbortError') { setPreview(null); return }
+        // 공유 실패 시 다운로드로 폴백
+      }
+    }
+    // 폴백: 일반 다운로드
+    const a = document.createElement('a'); a.download = filename; a.href = preview; a.click()
     setPreview(null)
   }, [preview])
 
