@@ -45,19 +45,18 @@ html, body, #root {
 
 /* ── 터치 초점 링 ── */
 .focus-ring {
-  position: absolute;
   width: 64px; height: 64px;
   border: 2px solid var(--accent);
   border-radius: 6px;
-  transform: translate(-50%, -50%);
   pointer-events: none; z-index: 15;
   animation: focusSeeking 0.25s ease-out forwards;
   box-shadow: 0 0 0 1px rgba(0,0,0,0.4);
+  flex-shrink: 0;
 }
 /* 탐색 중: 크게 시작해 줄어듦 */
 @keyframes focusSeeking {
-  from { opacity:1; transform:translate(-50%,-50%) scale(1.5); }
-  to   { opacity:1; transform:translate(-50%,-50%) scale(1);   }
+  from { opacity:1; transform:scale(1.5); }
+  to   { opacity:1; transform:scale(1);   }
 }
 /* 초점 잠금 성공: 흰색으로 바뀌며 유지 */
 .focus-ring.locked {
@@ -65,8 +64,8 @@ html, body, #root {
   animation: focusLocked 0.2s ease-out forwards;
 }
 @keyframes focusLocked {
-  from { transform:translate(-50%,-50%) scale(1.1); }
-  to   { transform:translate(-50%,-50%) scale(0.9); }
+  from { transform:scale(1.1); }
+  to   { transform:scale(0.9); }
 }
 /* 미지원 기기: 회색으로 빠르게 사라짐 */
 .focus-ring.auto {
